@@ -41,11 +41,11 @@ async fn main() {
     let mut consumer_tasks = Vec::new();
     let mut producer_handle = None;
     let mut dispatcher_handle = None;
-
+    
     // Receiving message from Kafka
     let use_redpanda_consumer = false;
     // Sending message to Kafka
-    let use_redpanda_producer = false;
+    let use_redpanda_producer = true;
 
     // Setting up kafka consumer
     if use_redpanda_consumer {

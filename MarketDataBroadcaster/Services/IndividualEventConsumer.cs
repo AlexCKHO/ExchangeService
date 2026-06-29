@@ -7,6 +7,8 @@ using Orderbook;
 
 namespace MarketDataBroadcaster.Services;
 
+// For Individual users to subscribe their own account event, 
+// by submitting their IDs
 
 /*
    NETWORK INTAKE                 IN-MEMORY PIPELINE (RAM DECOUPLING)                  NETWORK EGRESS
@@ -145,7 +147,7 @@ public class IndividualEventConsumer : BackgroundService
                 }
             }
         }
-    }
+    } 
 
     private async Task BroadcastEventAsync(MatchEvent matchEvent)
     {
