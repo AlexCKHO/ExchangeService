@@ -7,27 +7,31 @@ This project is a high-performance, low-latency electronic trading system consis
 The system follows a distributed, actor-based model to ensure maximum CPU utilization and mechanical sympathy. The architecture is deliberately designed to isolate the synchronous matching core from asynchronous networking I/O.
 
 ```text
-[ Simulator / Client ]
-         |
-         | HTTP
-         v
-     [ OMS (C#) ]
-         |
-         | gRPC
-         v
-[ Matching Engine (Rust) ]
-         |
-         | Domain Events
-         v
-    [ Kafka / Redpanda ]
-      |           |           |
-      |           |           |
-      v           v           v
- [ Projector ] [ Market Data ] [ Notification ]
-      |
-      | SQL
-      v
- [ Read Model DB ]
+                [ Simulator / Client ]
+                         |
+                         | HTTP
+                         v
+                     [ OMS (C#) ]
+                         |
+                         | TCP
+                         v
+              [ Master Sequencer (C#) ] ---> mmap
+                         |
+                         | UDP Multicast
+                         v
+[Follower Sequencer(C#)] .. [ Matching Engine (Rust) ] 
+                         |
+                         | Domain Events
+                         v
+                [ Kafka / Redpanda ]
+              |           |           |
+              |           |           |
+              v           v           v
+      [ Projector ] [ Market Data ] [ Notification ]
+                         |
+                         | SQL
+                         v
+                    [ Read Model DB ]
 ```
 
 ## Components
@@ -68,6 +72,23 @@ Batched gRPC (4 Multiplexed Streams): ~9.5M TPS
 
 Latency: Sub-millisecond p99 tail latencies under sustained load.
 
+##  Sequencer
+
+The Sequencer consumers unordered orders arriving from multiple OMS connections and produces a single stream of SequencedOrder records. The stream guarentees: 
+
+### 1. Monotonic
+Every SeqId is strictly greater than the previous;
+
+### 2. Gapless
+SeqIds are contiguous with no holes (1, 2, 3…, never 1, 2, 4); 
+
+### 3. Durable
+Every record is written to the WAL before it is transmitted, so a committed SeqId survives an application restart;
+
+### 4. Replayable
+Reading the WAL from the start reconstructs the identical, byte-for-byte stream in the same order.
+
+Ordering is defined by the order the single sequencer thread dequeues from its input, not by wall-clock or NIC arrival. Durability here means application-crash survivable, not power-loss proof. Machine-level durability comes from replication, not this WAL.
 
 ## 🚧 Development Focus
 The current development cycle is focused on hardening the Kafka event pipeline to match the ingestion throughput, preventing producer deadlocks, and exploring shared memory (IPC) for co-located deployments to completely bypass network serialization overhead.

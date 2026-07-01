@@ -61,7 +61,7 @@ public class PublicEventConsumer : BackgroundService
 
         using var consumer = new ConsumerBuilder<Ignore, byte[]>(config).Build();
         consumer.Subscribe(_config["Kafka:Topic"]);
-
+ 
         try
         {
             while (!stoppingToken.IsCancellationRequested)
