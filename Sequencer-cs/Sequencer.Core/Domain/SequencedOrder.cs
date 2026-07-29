@@ -1,3 +1,7 @@
 namespace Sequencer.Core.Domain;
 
-public struct SequencedOrder(Order Order, ulong SeqId, ulong IngestTicks);
+// Value type for Order after appended SeqId
+public struct SequencedOrder(
+    Order Order, // Order from OMS
+    ulong SeqId, // Appended Sequence ID
+    ulong IngestTicks); // Exact tick right after Sequence ID appended
