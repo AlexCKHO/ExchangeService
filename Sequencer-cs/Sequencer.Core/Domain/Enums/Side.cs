@@ -1,6 +1,6 @@
 namespace Sequencer.Core.Domain.Enums;
 
-public enum Side
+public enum Side : byte
 {
     SIDE_UNSPECIFIED = 0,
     BID = 1,

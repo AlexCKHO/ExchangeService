@@ -1,6 +1,6 @@
 namespace Sequencer.Core.Domain.Enums;
 
-public enum OrderType
+public enum OrderType : byte
 {
     ORDERTYPE_UNSPECIFIED = 0,
     LIMIT = 1,

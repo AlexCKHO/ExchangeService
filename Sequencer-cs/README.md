@@ -63,3 +63,84 @@ The following interfaces govern the lifecycle and reliability of the data flowin
 ### `IGapDetector`
 * **Responsibility:** Sequence gap detection.
 * **Details:** Typically situated on the receiving end. It monitors the incoming SeqIds to ensure there are no skips. If a gap is detected (e.g., receiving SeqId 1045 and then suddenly 1047), it instantly triggers a NAK request to fetch the missing message.
+
+## 4. Core Object
+
+The following is the data type that used in the sequencer application:
+
+### `Order`
+
+- **Responsibility:** The raw incoming order format transmitted from the Order Management System (OMS) to the Sequencer.
+    
+- **Details:**
+    
+    - `ulong ClientOrderId`: Client account order ID.
+        
+    - `ulong Price`: Order Price.
+        
+    - `ulong Qty`: Order Quantity.
+        
+    - `Side Side`: Trade direction (Bid or Ask).
+        
+    - `OrderType OrderType`: Execution type (Limit or Market).
+        
+    - `long Timestamp`: Initial order arrival time.
+        
+
+### `SequencedOrder`
+
+- **Responsibility:** A value type representing the order after it has been successfully processed by the sequencer. This is the exact format transmitted downstream to the matching engine/OrderBook.
+    
+- **Details:**
+    
+    - `Order Order`: The original incoming order from the OMS.
+        
+    - `ulong SeqId`: The uniquely appended, monotonically increasing Sequence ID.
+        
+    - `ulong IngestTicks`: The precise, high-resolution tick timestamp captured the exact moment the Sequence ID was appended.
+        
+
+### `WalRecord`
+
+- **Responsibility:** The memory-optimized, low-level data structure tailored for persisting the sequenced order to the Write-Ahead Log (WAL).
+    
+- **Details:**
+    
+    - `uint Magic`: A magic number used to validate log file headers or structural boundaries.
+        
+    - `ushort Version`: The current WAL format version.
+        
+    - `ushort PayLoadLen`: The total byte length of the serialized payload.
+        
+    - `ulong IngestTicks`: The sequencer's ingestion timestamp.
+        
+    - `ulong seqId`: The gl obally assigned Sequence ID.
+        
+    - `Span<byte> Payload`: The memory span containing the serialized byte data of the order.
+        
+    - `uint crc32`: Ag used to verify data integrity upon log replay or crash recovery.
+        
+
+### `GapResult`
+
+- **Responsibility:** Represents the output from the `IGapDetector`, detailing any missing `SeqId` packets identified on the receiving end.
+    
+- **Details:** Used to trigger the `INakResponder` to request retransmission for the specified range of dropped messages.
+
+
+```
+[Fixed-Length Header]               [Variable-Length]   [Checksum]
+┌───────┬─────────┬────────────┬─────────────┬───────┬──────────────────┬───────┐
+│ Magic │ Version │ PayLoadLen │ IngestTicks │ seqId │     Payload      │ crc32 │
+└───────┴─────────┴────────────┴─────────────┴───────┴──────────────────┴───────┘
+    │        │           │                         │          │          │
+    │        │           │                         │          │          └──> Read immediately after Payload
+    │        │           │                         │          │               to verify checksum
+    │        │           │                         │          └──────────────── Skip the exact number of bytes
+    │        │           │                         │                            specified by PayLoadLen
+    │        │           │                         └───────────────────────── Read seqId
+    │        │           └─────────────────────────────────────────────────── Read this value (e.g., 256 bytes)
+    │        │                                                                to know Payload length
+    │        └─────────────────────────────────────────────────────────── Verify format version
+    └──────────────────────────────────────────────────────────────────── Verify this is a valid record starts
+```
