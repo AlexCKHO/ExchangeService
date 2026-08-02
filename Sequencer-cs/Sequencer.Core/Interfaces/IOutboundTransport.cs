@@ -8,7 +8,7 @@ public interface IOutboundTransport
 {
     
     
-    void Send(in SequencedOrder sequencedOrder);
+    //void Send(in SequencedOrder sequencedOrder);
     
 
 }

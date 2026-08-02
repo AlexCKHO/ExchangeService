@@ -5,5 +5,5 @@ namespace Sequencer.Core.Interfaces;
 // Follower Sequencer to handle incoming SequencedOrder
 public interface IInboundTransport
 {
-    event Action<SequencedOrder> OnSequencedOrderReceived;
+  //  event Action<SequencedOrder> OnSequencedOrderReceived;
 }
