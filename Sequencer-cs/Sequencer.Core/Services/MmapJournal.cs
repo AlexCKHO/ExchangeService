@@ -49,12 +49,15 @@ public unsafe class MmapJournal : IJournal, IDisposable
         header->IngestTicks = (ulong)System.Diagnostics.Stopwatch.GetTimestamp();
         header->Reserved = 0;
         
-        byte*  payloadPointer = currentPointer + sizeof(RecordHeader);
-        Unsafe.CopyBlock(
-            destination: payloadPointer,
-            source: Unsafe.AsPointer(ref payload),
-            byteCount: (uint)totalLength
-            );
+        byte* payloadPointer = currentPointer + sizeof(RecordHeader);
+        
+          *(T*)payloadPointer = payload;
+        
+        // Unsafe.CopyBlock(
+        //     destination: payloadPointer,
+        //     source: Unsafe.AsPointer(ref payload),
+        //     byteCount: (uint)payloadSize
+        //     );
 
         header->CheckSum = HashHelper.CalculateChecksum(ref payload);
         Volatile.Write(ref header->FrameLength, totalLength);
