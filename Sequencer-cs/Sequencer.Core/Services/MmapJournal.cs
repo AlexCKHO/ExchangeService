@@ -11,6 +11,8 @@ public unsafe class MmapJournal : IJournal, IDisposable
 {
     // Current File Resources
     private static readonly int PageSize = Environment.SystemPageSize;
+    private static readonly int FILE_HEADER_SIZE = 4096; // First page 4kb for header 
+    private const ulong JOURNAL_MAGIC = 0x4C4E524A; // "JRNL" in Hex
 
     private MemoryMappedFile _mmf;
     private MemoryMappedViewAccessor _accessor;
@@ -32,9 +34,9 @@ public unsafe class MmapJournal : IJournal, IDisposable
     private readonly long _rollingThreshold;
 
     // Dedicated Pre-warmer Thread Controls
+    private readonly ManualResetEventSlim _prewarmSignal = new(false);
     private readonly Thread _prewarmerThread;
-    private readonly AutoResetEvent _prewarmSignal = new(false);
-    private volatile bool _disposed = false;
+    private volatile bool _threadDisposed = false;
 
     public MmapJournal(string fileName, long fileCapacityBytes)
     {
@@ -44,17 +46,29 @@ public unsafe class MmapJournal : IJournal, IDisposable
         _fileCapacityBytes = fileCapacityBytes;
         // Create new journal file when current size reaches 80%
         _rollingThreshold = (long)(fileCapacityBytes * 0.8);
+        _currentFileSeq = GetHighestJournalSeq(Path.GetDirectoryName(fileName), Path.GetFileName(fileName));
 
         // 2. Set up MemoryMappedFile
 
+        bool isNewFile = !File.Exists(_currentFilePath);
+
+
+        // 3. Set up MemoryMappedFile
         _mmf = MemoryMappedFile.CreateFromFile(_currentFilePath, FileMode.OpenOrCreate, null, fileCapacityBytes,
             MemoryMappedFileAccess.ReadWrite);
-
-        // 3. Set up MemoryMappedViewAccessor
-
         _accessor = _mmf.CreateViewAccessor();
         _accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref _basePointer);
-        _currentOffset = 0;
+        if (isNewFile)
+        {
+            // 新檔案：Format Header 並將 Offset 指向資料區開始 (4096)
+            FormatFileHeader(_basePointer, _currentFileSeq);
+            _currentOffset = FILE_HEADER_SIZE;
+        }
+        else
+        {
+            // 舊檔案復原：從 4096 開始 Scan，搵出下一個可以寫入嘅空位
+            _currentOffset = RecoverTailOffset(_basePointer, fileCapacityBytes);
+        }
 
         // 4. Initialize and start the dedicated background thread
         _prewarmerThread = new Thread(PrewarmWorkerLoop)
@@ -65,15 +79,65 @@ public unsafe class MmapJournal : IJournal, IDisposable
         _prewarmerThread.Start();
     }
 
+    private int GetHighestJournalSeq(string directoryPath, string baseFileName)
+    {
+        if (!Directory.Exists(directoryPath)) Directory.CreateDirectory(directoryPath);
+
+        var files = Directory.GetFiles(directoryPath, $"{baseFileName}-*.dat");
+        int maxSeq = 1;
+
+        foreach (var file in files)
+        {
+            string name = Path.GetFileNameWithoutExtension(file);
+            string seqString = name.Replace($"{baseFileName}-", "");
+            if (int.TryParse(seqString, out int seq) && seq > maxSeq)
+            {
+                maxSeq = seq;
+            }
+        }
+
+        return maxSeq;
+    }
+
+    private long RecoverTailOffset(byte* basePtr, long capacity)
+    {
+        long offset = FILE_HEADER_SIZE;
+        while (offset < capacity)
+        {
+            RecordHeader* header = (RecordHeader*)(basePtr + offset);
+
+
+            if (header->FrameLength == 0) break;
+
+            offset += (header->FrameLength + 31) & ~31;
+        }
+
+        return offset;
+    }
+
+    private void FormatFileHeader(byte* basePtr, int seq)
+    {
+        FileHeader* header = (FileHeader*)basePtr;
+        header->Magic = JOURNAL_MAGIC;
+        header->Version = 1;
+        header->FileSeq = seq;
+        header->FirstSeqId = 0;
+        header->CreatedTicks = DateTime.UtcNow.Ticks;
+    }
+
     private void PrewarmWorkerLoop()
     {
-        while (!_disposed)
+        while (!_threadDisposed)
         {
-            // Sleep until Append signals work is needed
-            _prewarmSignal.WaitOne();
+            // 1. Wait for signal
+            _prewarmSignal.Wait();
 
-            if (_disposed) break;
+            if (_threadDisposed) break;
 
+            // 2. Reset signal back to unsignaled state manually
+            _prewarmSignal.Reset();
+
+            // 3. Perform Segment Rolling I/O
             PrepareNextFile();
         }
     }
@@ -86,13 +150,19 @@ public unsafe class MmapJournal : IJournal, IDisposable
         if (_currentOffset > _rollingThreshold && !_isPreparingNextFile)
         {
             _isPreparingNextFile = true;
-            Task.Run(() => PrepareNextFile());
+            _prewarmSignal.Set(); // Wake up thread if waiting so it can exit
         }
 
         if (_currentOffset + totalLength > _fileCapacityBytes)
         {
             SwitchToNextFile();
             _prewarmSignal.Set();
+        }
+
+        if (_currentOffset == FILE_HEADER_SIZE)
+        {
+            FileHeader* fileHeader = (FileHeader*)_basePointer;
+            fileHeader->FirstSeqId = seqId;
         }
 
         // Pointer Casting 
@@ -137,11 +207,14 @@ public unsafe class MmapJournal : IJournal, IDisposable
 
             preWarmPage(tempPtr, _fileCapacityBytes);
 
+            FormatFileHeader(tempPtr, nextSeq);
+
             // Set nextMmf to temp mmf
             _nextFilePath = nextFilePath;
             _currentFileSeq = nextSeq;
             _mmfNext = tempMmf;
             _accessorNext = tempAccessor;
+
 
             Thread.MemoryBarrier();
             _basePointerNext = tempPtr;
@@ -180,7 +253,7 @@ public unsafe class MmapJournal : IJournal, IDisposable
         _accessor = _accessorNext;
         _basePointer = _basePointerNext;
         _currentFilePath = _nextFilePath;
-        _currentOffset = 0;
+        _currentOffset = FILE_HEADER_SIZE;
 
         // Reset the _mmfNext and related fields
         _mmfNext = null;
@@ -221,5 +294,14 @@ public unsafe class MmapJournal : IJournal, IDisposable
 
         _accessorNext?.Dispose();
         _mmfNext?.Dispose();
+
+        _threadDisposed = true;
+        _prewarmSignal.Set();
+        if (_prewarmerThread.IsAlive)
+        {
+            _prewarmerThread.Join();
+        }
+
+        _prewarmSignal.Dispose();
     }
 }
