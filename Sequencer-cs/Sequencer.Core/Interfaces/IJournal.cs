@@ -9,7 +9,7 @@ public interface IJournal
 {
     // Input: New OrderRequest or OrderCancelRequest, 
     // Process: Saving Request to mmap with RecordHeader (Zero Allocation)
-    void Append<T>(CommandType orderType, ushort version, ref T payload) where T : unmanaged;
+    public void Append<T>(CommandType orderType, ulong seqId, ushort version, ref T payload) where T : unmanaged;
 
 
     // Purpose: if follower sequence or Matching Engine is down,
